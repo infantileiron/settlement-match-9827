@@ -1,8 +1,8 @@
 import json
-from datetime import date,timedelta
+from datetime import date,datetime,timedelta
 from sqlalchemy import select,func
 from src.config.database import initialize,Session
-from src.models import StatementBatch,SettlementItem,MatchPolicy,MatchRun,MatchReview,Report,User
+from src.models import StatementBatch,SettlementItem,MatchPolicy,MatchRun,MatchReview,Report,User,ImportRun
 from src.utils.security import hash_password
 from src.services.run_service import compute
 
@@ -36,6 +36,9 @@ def seed():
    if not db.scalar(select(User).where(User.email==email)):db.add(User(id="user-"+role,email=email,role=role,password_hash=hash_password("MatchDemo2026!")))
   if not db.get(StatementBatch,"demo-batch"):db.add(StatementBatch(id="demo-batch",name="长川十一月译务结算模拟",description="80委托/65凭证；文件changchuan_settlement_202611.csv；不连接银行"))
   db.commit()
+  if not db.get(ImportRun,"demo-import"):
+   db.add(ImportRun(id="demo-import",batch_id="demo-batch",status="completed",source="initial",actor="analyst@settlement.demo",total_rows=len(make_items()),inserted_rows=len(make_items()),duplicate_rows=0,quarantined_rows=0,conflict_rows=0,note="种子批次首次导入",created_at=datetime(2026,11,1,9,0,0),finished_at=datetime(2026,11,1,9,0,1)))
+   db.commit()
   for row in make_items():
    ident="demo-"+row["external_id"]
    if not db.get(SettlementItem,ident):db.add(SettlementItem(id=ident,batch_id="demo-batch",**row))
@@ -47,5 +50,5 @@ def seed():
   db.commit()
   if not db.get(Report,"demo-report"):db.add(Report(id="demo-report",review_id="demo-review",title="长川译务结算勾稽底稿",snapshot={"result":db.get(MatchRun,"demo-run").result,"action":db.get(MatchReview,"demo-review").action,"reviewer":"admin@settlement.demo"}))
   db.commit()
-  return {cls.__tablename__:db.scalar(select(func.count()).select_from(cls)) for cls in [User,StatementBatch,SettlementItem,MatchPolicy,MatchRun,MatchReview,Report]}
+  return {cls.__tablename__:db.scalar(select(func.count()).select_from(cls)) for cls in [User,StatementBatch,SettlementItem,MatchPolicy,MatchRun,MatchReview,Report,ImportRun]}
 if __name__=="__main__":print(json.dumps(seed(),ensure_ascii=False))

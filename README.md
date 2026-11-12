@@ -31,7 +31,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 目录：`backend/src/{models,schemas,services,controllers,routes}`按六实体分层；`input_records.py`校验、`compatibility.py`硬约束与非货币评分、`hungarian.py`双侧拒配、`subset_sum.py`受限组合、`reconcile.py`两阶段及输入哈希。`config,utils,middlewares`提供数据库、JWT/口令摘要、队列、审计和错误。种子在 `backend/scripts/seed_demo.py`，`migrations/001_schema.sql`说明新库基线，实际以元数据建表。
 
-前端 `src/{api,stores,types,constants,hooks,utils,router,pages}`，MatchMetrics/MatchFlow/MatchLedger/UnmatchedTable跨总览、结果、归档复用。测试、截图、日志位于批次外层 `test-artifacts/gb-2308`，不进入本源码目录。
+前端 `src/{api,stores,types,constants,hooks,utils,router,pages}`，MatchMetrics/MatchFlow/MatchLedger/UnmatchedTable跨总览、结果、归档复用，ImportResult逐行展示续传的写入/重复/隔离。测试、截图、日志位于批次外层 `test-artifacts/gb-2308`，不进入本源码目录。
 
 本地开发：安装requirements，设置可用DATABASE_URL/REDIS_URL，从backend启动 `uvicorn src.main:app --reload`，另起 `python -m src.worker`；前端 `npm ci && npm run dev`，构建 `npm run build`。默认OpenBLAS/OMP线程1。环境变量COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET、SEED_DEMO；Compose内部提供DATABASE_URL/REDIS_URL。`.env`忽略，演示密钥与口令仅供本地模拟，部署使用独立配置。
 
@@ -51,11 +51,25 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 ## 输入与精度
 
-CSV列 `external_id,side,party,reference,amount_cents,currency,booking_date`。side为milestone/receipt，每批1至500条。金额仅接受1至100000000的**整数分**，CSV用ASCII整数正则后直接int，JSON用StrictInt；不接受元、小数、科学计数法、负数、零、NaN或布尔值，不先经float再转整数。前端可将分格式化显示为元，金额计算始终用分。
+CSV列 `external_id,side,party,reference,amount_cents,currency,booking_date`。side为milestone/receipt，每次导入1至500条。金额仅接受1至100000000的**整数分**，CSV用ASCII整数正则后直接int，JSON用StrictInt；不接受元、小数、科学计数法、负数、零、NaN或布尔值，不先经float再转整数。前端可将分格式化显示为元，金额计算始终用分。
 
 币种只接受CNY，业务日期为有效YYYY-MM-DD。同批external_id去首尾空白后按大小写精确识别、不可重复；数据库该列使用二进制排序规则与此一致。往来方/引用比较采用Unicode NFKC、大小写归一及空白合并，原始文本仍留存。
 
 补录仅新增同批分录，不改已保存运行和报告。分录列表支持batch_id/side过滤，单批最多500条完整返回；其他实体列表最多200条。一次运行输入完整分录快照及规范JSON的SHA256保存，CSV携带同一哈希。
+
+### 续传与逐行隔离
+
+对已存在批次可 `POST /batches/{id}/imports` 续传，不再整批失败。解析逐行进行，坏金额/坏日期/坏币种/坏方向只让该行进入隔离，其余合法新分录照常入账。每条原始行都会保存行号、原文、解析值、结果与原因码：
+
+| 结果 | 含义 |
+|---|---|
+| inserted | 合法且该批此前无同编号分录，本次写入 |
+| duplicate | 同批同编号且内容一致（往来方/引用按NFKC与空白归一，金额日期等精确比较） |
+| quarantined | 坏行或内容冲突；保留原文与原因，不写账、不覆盖原记录 |
+
+`inserted + duplicate + quarantined` 始终等于原始数据行数，导入结果页逐行展示三类明细与合计校验。冲突行不影响同批次其他行，可在核对后修正再导入（修正后的编号若仍未入账则正常写入；若原记录已存在则按内容判重复或冲突）。同一上传内出现两次同编号：内容一致时首行为写入、次行为重复；内容不一致时两行都隔离，避免未经核对的内容入账。
+
+并发与重试：整次导入在一个事务内完成，`UNIQUE(batch_id, external_id)` 让并发写入者只有一方成功，另一方回滚后按已写入内容重新判定为重复/冲突，不会重复入账。客户端可带 `idempotency_key`，同批同键的重试直接返回首次结果（不重新写入）；不带键的重复上传会重新逐行判定，已有分录按内容判重复。`GET /batches/{id}/imports` 与 `GET /batches/{id}/imports/{import_id}` 返回同一份逐行结果。
 
 ## 第一阶段：含双侧拒配的全局一对一
 

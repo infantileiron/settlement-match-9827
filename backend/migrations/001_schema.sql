@@ -1,3 +1,15 @@
--- SQLAlchemy creates batches, items, policies, runs, reviews, reports, users, audits on a new MySQL database.
--- Amounts and amount tolerances use BIGINT. Non-monetary scoring parameters use DOUBLE.
--- Unique(batch_id, external_id) prevents duplicate ledger IDs. Existing deployments need reviewed migrations.
+-- SQLAlchemy creates batches, items, policies, runs, reviews, reports, users, audits
+-- and import_runs/import_rows on a new MySQL database. This file records the
+-- baseline and the continuation-import additions for reviewed migrations.
+--
+-- Items: Unique(batch_id, external_id) prevents duplicate ledger IDs. The
+-- import pipeline relies on this index plus a per-batch idempotency key to keep
+-- concurrent continuations from writing the same entry twice.
+--
+-- import_runs: one row per import attempt (initial creation or continuation).
+--   unique(batch_id, idempotency_key): a reused retry key returns the stored
+--   result instead of writing again; NULL keys do not constrain re-uploads.
+-- import_rows: one row per original CSV line with outcome in
+--   inserted / duplicate / quarantined, reason codes, immutable raw_text, the
+--   parsed snapshot and item_id/existing_item_id for row-level tracing.
+--   inserted + duplicate + quarantined always equals import_runs.total_rows.
